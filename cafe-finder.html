@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Neon Cafe Finder</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <style>
+    body {
+      margin: 0;
+      font-family: "Poppins", sans-serif;
+      background: #1a001f; /* dark base for neon */
+      display: flex;
+      color: #fff;
+    }
+    #sidebar {
+      width: 30%;
+      height: 100vh;
+      background: #330033;
+      overflow-y: auto;
+      box-shadow: 2px 0 12px rgba(255, 20, 147, 0.6);
+      padding: 15px;
+      display: flex;
+      flex-direction: column;
+    }
+    #map {
+      flex: 1;
+      height: 100vh;
+    }
+    #sidebar h2 {
+      margin-top: 0;
+      color: #ff66cc;
+      text-align: center;
+      text-shadow: 0 0 8px #ff66cc, 0 0 15px #ff33cc;
+    }
+    #controls {
+      display: flex;
+      gap: 5px;
+      margin-bottom: 10px;
+    }
+    #locationInput, #filterSelect {
+      flex: 1;
+      padding: 8px;
+      border-radius: 10px;
+      border: none;
+      outline: none;
+      background: #260026;
+      color: #fff;
+      box-shadow: 0 0 6px #ff33cc;
+    }
+    #searchBtn {
+      background: #ff33cc;
+      border: none;
+      padding: 8px 12px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-weight: bold;
+      color: #fff;
+      box-shadow: 0 0 10px #ff33cc, 0 0 20px #ff33cc;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    #searchBtn:hover {
+      transform: scale(1.05);
+      box-shadow: 0 0 20px #ff66ff, 0 0 30px #ff33cc;
+    }
+    .cafe-item {
+      background: #260026;
+      margin: 8px 0;
+      padding: 12px;
+      border-radius: 12px;
+      box-shadow: 0 0 10px #ff33cc;
+      cursor: pointer;
+      transition: transform 0.2s, background 0.3s;
+    }
+    .cafe-item:hover {
+      transform: scale(1.05);
+      background: #400040;
+      box-shadow: 0 0 15px #ff66ff, 0 0 30px #ff33cc;
+    }
+    .cafe-item small {
+      color: #ff99ff;
+    }
+  </style>
+</head>
+<body>
+  <div id="sidebar">
+    <h2>☕ Neon Cafe Finder</h2>
+    <div id="controls">
+      <input id="locationInput" type="text" placeholder="Enter a city or place">
+      <button id="searchBtn" onclick="searchCafes()">Find</button>
+    </div>
+    <select id="filterSelect" onchange="applyFilter()">
+      <option value="all">Show all cafes</option>
+      <option value="named">Only cafes with names</option>
+      <option value="alphabetical">Sort A → Z</option>
+      <option value="distance">Sort by distance</option>
+    </select>
+    <div id="cafeList"></div>
+  </div>
+  <div id="map"></div>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+  <script>
+    let map = L.map('map').setView([12.9716, 77.5946], 14); // Default Bangalore
+    let cafeLayer = L.layerGroup().addTo(map);
+    let cafeListDiv = document.getElementById("cafeList");
+    let cafes = []; // store cafes for filtering
+
+    // Neon map tiles (Carto Dark or OSM)
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>',
+      subdomains: 'abcd',
+      maxZoom: 20
+    }).addTo(map);
+
+    // Neon coffee cup icon
+    const cafeIcon = L.icon({
+      iconUrl: "https://cdn-icons-png.flaticon.com/512/2171/2171990.png", // neon-style coffee cup
+      iconSize: [32, 32],
+      iconAnchor: [16, 32],
+      popupAnchor: [0, -28]
+    });
+
+    async function searchNearby(lat, lon) {
+      cafeLayer.clearLayers();
+      cafeListDiv.innerHTML = "";
+      cafes = []; // reset
+      let radius = 2000;
+
+      let query = `
+        [out:json];
+        node(around:${radius},${lat},${lon})["amenity"="cafe"];
+        out;
+      `;
+
+      let url = "https://overpass-api.de/api/interpreter?data=" + encodeURIComponent(query);
+      let response = await fetch(url);
+      let data = await response.json();
+
+      if (data.elements.length === 0) {
+        cafeListDiv.innerHTML = "<p>No cafes found nearby ☹️</p>";
+        return;
+      }
+
+      // Save cafes
+      cafes = data.elements.map(cafe => ({
+        ...cafe,
+        distance: getDistance(lat, lon, cafe.lat, cafe.lon)
+      }));
+
+      renderCafes(cafes);
+    }
+
+    function renderCafes(cafeArray) {
+      cafeLayer.clearLayers();
+      cafeListDiv.innerHTML = "";
+
+      cafeArray.forEach(cafe => {
+        let marker = L.marker([cafe.lat, cafe.lon], { icon: cafeIcon }).addTo(cafeLayer);
+        marker.bindPopup(`<strong>${cafe.tags.name || "Unnamed Cafe"}</strong><br>
+                          🌍 ${cafe.lat.toFixed(4)}, ${cafe.lon.toFixed(4)}`);
+
+        // Sidebar list item
+        let div = document.createElement("div");
+        div.className = "cafe-item";
+        div.innerHTML = `☕ ${cafe.tags.name || "Unnamed Cafe"} 
+                         <br><small>📏 ${cafe.distance.toFixed(0)} m away</small>`;
+        div.onclick = () => {
+          map.setView([cafe.lat, cafe.lon], 18);
+          marker.openPopup();
+        };
+        cafeListDiv.appendChild(div);
+      });
+    }
+
+    function applyFilter() {
+      let filter = document.getElementById("filterSelect").value;
+      let filtered = [...cafes];
+
+      if (filter === "named") {
+        filtered = filtered.filter(cafe => cafe.tags.name);
+      } else if (filter === "alphabetical") {
+        filtered.sort((a, b) => (a.tags.name || "").localeCompare(b.tags.name || ""));
+      } else if (filter === "distance") {
+        filtered.sort((a, b) => a.distance - b.distance);
+      }
+
+      renderCafes(filtered);
+    }
+
+    async function searchCafes() {
+      const location = document.getElementById("locationInput").value;
+      if (!location) return;
+
+      let url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(location)}`;
+      let response = await fetch(url);
+      let data = await response.json();
+
+      if (data.length > 0) {
+        let lat = parseFloat(data[0].lat);
+        let lon = parseFloat(data[0].lon);
+        searchNearby(lat, lon);
+        map.setView([lat, lon], 14);
+      } else {
+        alert("Location not found!");
+      }
+    }
+
+    // Distance formula (Haversine)
+    function getDistance(lat1, lon1, lat2, lon2) {
+      const R = 6371e3;
+      const φ1 = lat1 * Math.PI/180;
+      const φ2 = lat2 * Math.PI/180;
+      const Δφ = (lat2-lat1) * Math.PI/180;
+      const Δλ = (lon2-lon1) * Math.PI/180;
+
+      const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
+                Math.cos(φ1) * Math.cos(φ2) *
+                Math.sin(Δλ/2) * Math.sin(Δλ/2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+
+      return R * c; // meters
+    }
+
+    // Load Bangalore cafes on start
+    searchNearby(12.9716, 77.5946);
+  </script>
+</body>
+</html>
